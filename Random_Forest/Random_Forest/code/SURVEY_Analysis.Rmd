@@ -1,0 +1,194 @@
+---
+title: "Decision Tree Analysis"
+author: "Group 7"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: leonids
+    highlight: github
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+
+# DECISION TREES ANALYSIS -- CLASSIFICATION
+
+## Dataset Description.
+
+The dataset contains information collected on multivariate II survey
+
+### Variables Used:
+
+| Variable | Description |
+|--------------------------------|----------------------------------------|
+| `"explanation_clarity",` | How well was the method explained in terms of fundamental principles and technical details |
+| `audience_engagement` | How effective was the group at holding the audience’s attention throughout |
+| `slides_effectiveness` | How effective were the slides in supporting the verbal explanation |
+| `presentation_structure` | Was the presentation structured logically with smooth transitions |
+| `response_to_questions` | How did the group respond to audience inquiries |
+| `r_application_usefulnes` | useful was the R-application in demonstrating the application of the method |
+
+| `best method overall` | Method that was best explained |
+
+## Libraries and Setup
+
+Key R libraries tools are loaded to streamline data processing, modeling, and evaluation.
+
+```{r}
+# Load necessary libraries
+library(MASS)        # For dataset
+library(rpart)       # For decision tree modeling
+library(rpart.plot)  # For tree visualization
+#library(caret)       # For train-test split and evaluation
+library(e1071)       # For model tuning
+library(tidyverse)
+library(kableExtra)
+library(ggthemes)    # For advanced ggplot themes
+library(scales)      # For scale formatting
+library(forcats)# For categorical variable handling
+library(readxl)
+```
+
+##Loading the Data
+
+```{r}
+data <- read_excel("SURVEY_DATA_03_DT.xlsx")
+data
+```
+
+
+
+
+
+## DATA EXPLORATION
+
+```{r}
+library(ggplot2)
+# 1.1 Distribution of the target variable (best_method_overall)
+cat("\n1. Distribution of Best Methods:\n")
+table(data$best_method_overall)
+prop.table(table(data$best_method_overall))
+
+p = ggplot(data, aes(x = best_method_overall, fill = best_method_overall)) +
+  geom_bar(alpha = 0.8) +
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) +
+  labs(title = "Distribution of Best Methods Selected",
+       x = "Method", y = "Count") +
+  theme_minimal() +
+  theme(legend.position = "none")
+print(p)
+```
+```{r}
+library(tidyr)
+library(dplyr)
+
+# Calculate averages per method
+summary_data <- data %>%
+  group_by(best_method_overall) %>%
+  summarise(across(where(is.numeric), mean)) %>%
+  pivot_longer(-best_method_overall, names_to = "Metric", values_to = "Avg_Score")
+
+# Create Heatmap
+ggplot(summary_data, aes(x = Metric, y = best_method_overall, fill = Avg_Score)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "darkgreen") +
+  geom_text(aes(label = round(Avg_Score, 1)), size = 3) +
+  labs(title = "Performance Heatmap: Methods vs. Survey Metrics",
+       x = "Survey Metric", y = "Method", fill = "Avg Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+### Explanation
+Overall, MCA shows the strongest overall pattern, with high scores across all criteria and particularly strong audience engagement, while maintaining clarity and practical relevance. PCAMix and DCA display consistent results, especially in structure and clarity, with moderate engagement. TA and DTA place greater emphasis on technical depth and application, with DTA showing a more balanced profile. MANOVA, DA, and CCA show steady, mid-range results across most criteria, with DA and CCA demonstrating slightly stronger clarity and application.
+
+```{r}
+# Calculate importance
+importance <- tree_model$variable.importance
+imp_df <- data.frame(Variable = names(importance), Importance = as.numeric(importance))
+
+# Plot
+r = ggplot(imp_df, aes(x = reorder(Variable, Importance), y = Importance, fill = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() + # Makes it easier to read variable names
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(title = "What Factors Drove the 'Best Method' Choice?",
+       x = "Survey Question", y = "Importance Score") +
+  theme_minimal() + theme(legend.position = "none")
+print(r)
+
+```
+
+
+
+
+```{r}
+# Convert Method to factor (target variable)
+data$Method <- as.factor(data$best_method_overall)
+
+tree_model <- rpart(
+  best_method_overall ~ 
+    explanation_clarity +
+    audience_engagement +
+    slides_effectiveness +
+    presentation_structure +
+    response_to_questions +
+    r_application_usefulness,
+  data = data,
+  method = "class",
+  control = rpart.control(minsplit = 7, cp = 0.03)
+)
+```
+
+
+
+```{r}
+# Plot the tree
+
+# 2. Draw the tree with better scaling
+rpart.plot(tree_model, 
+           type = 3,            # Shows labels on the branches
+           extra = 104,         # Shows percentages and counts
+           fallen.leaves = TRUE, 
+           cex = 0.6,           # Makes text slightly smaller to fit the boxes
+           tweak = 1.1,         # Scales the overall layout
+           box.palette = "BuGn",# Adds color based on the classification
+           shadow.col = "gray", # Makes it look cleaner
+           main = "Decision Tree: Best Method Overall")
+```
+
+
+## PREDICTION AND ACCURACY
+
+```{r message=FALSE, warning=FALSE}
+# Predict (example)
+predictions <- predict(tree_model, data, type = "class")
+print(predictions)
+```
+
+```{r}
+# Evaluate accuracy
+accuracy <- sum(predictions == data$Method) / nrow(data)
+print(paste("Accuracy:", accuracy))
+
+```
+
+
+### Explanation
+
+The classification report provides a detailed summary of the performance of the pruned classification decision tree in predicting the diabetes categories of diabetes and not having diabetes from the Outcome variable in the Diabetes dataset. For each class, the report includes three key metrics: precision, recall, and F1-score.
+
+Precision reflects the accuracy of positive predictions—how many patient predicted as belonging to a class actually belong to that class and has 84%
+
+The F1-score, a harmonic mean of precision and recall, gives an overall sense of the model’s balance in classification performance and has 83.4% Overall, the classification report demonstrates that the model is more confident and accurate in identifying clearly defined patient categories(Diabetic and no Diabetic). 
+
+
