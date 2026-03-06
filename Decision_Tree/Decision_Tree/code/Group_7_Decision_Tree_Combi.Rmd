@@ -1,0 +1,619 @@
+---
+title: "Decision Tree Analysis"
+author: "Group 7"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: leonids
+    highlight: github
+    # --- Add the following two lines ---
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+# DECISION TREES ANALYSIS -- CLASSIFICATION
+
+## Dataset Description.
+
+The **Diabetis** dataset contains information collected on health metrics and diagnostic measurements used to predict the onset of diabetis. It coontains medical data from individual and indicates if they have diabetes or not.
+
+### Variables Used:
+
+| Variable | Description |
+|--------------------------------|----------------------------------------|
+| `Pregnancies` | Number of times individual is pregant |
+| `Glocose` | Plasma glucose concentration froma 2-hour glucose tolerance test |
+| `BloodPressure` | Diastolic blood pressure (mm Hg) |
+| `Skin thickness` | Triceps skin thickness |
+| `Insulin` | 2 hour serum insulin (mu U/ml) |
+| `BMI` | Body Mass Index (weight in kg / height in m2) |
+| `DiabetesPedigreeFunction` | A function that scores the likelihood of diabetis based on family history |
+| `Age` | Age of the individual in years |
+| `Outcome` | Target variable indicating diabetes diagnosis |
+
+## Libraries and Setup
+
+Key R libraries tools are loaded to streamline data processing, modeling, and evaluation.
+
+```{r}
+# Load necessary libraries
+library(MASS)        # For Boston dataset
+library(rpart)       # For decision tree modeling
+library(rpart.plot)  # For tree visualization
+library(caret)       # For train-test split and evaluation
+library(e1071)       # For model tuning
+library(tidyverse)
+library(kableExtra)
+library(ggthemes)    # For advanced ggplot themes
+library(scales)      # For scale formatting
+library(forcats)# For categorical variable handling
+#library(modeldata)
+#library(tidymodels)
+```
+
+##Loading the Data
+
+```{r}
+diabetis = read_csv("Diabete_data_1.csv")
+diabetis$Insulin <- NULL
+diabetis
+```
+
+## Data Inspection
+
+Initial checks (e.g., str(), summary()) reveal data types, distributions, and missing values. No missing values were found, eliminating the need for imputation. This step ensures data quality before modeling.
+
+```{r}
+str(diabetis)
+summary(diabetis)
+```
+
+
+
+## DATA CLEANING
+
+```{r}
+# Check for missing values
+sum(is.na(diabetis))
+```
+
+```{r}
+# Removin NA in the Dataset
+attach(diabetis)
+diabetis_cln <- diabetis %>% drop_na(Pregnancies, 
+                                     Glucose, 
+                                     Blood_Pressure, 
+                                     Skin_Thickness, 
+                                     BMI,
+                                     Age,
+                                     Outcome)
+
+diabetis_cln
+
+```
+
+```{r}
+sum(is.na(diabetis_cln))
+```
+
+No NA values in this dataset, so no imputation needed. This step is essential to avoid biases or errors during modeling.
+
+
+## Histograms
+
+```{r}
+# Only numeric continuous variables (exclude Outcome)
+diabetis_cln <- diabetis %>% drop_na()
+
+numeric_vars <- diabetis_cln %>%
+  select(Pregnancies, 
+         Glucose, 
+         Blood_Pressure, 
+         Skin_Thickness,
+         BMI, 
+         Diabetes_Pedigree_Function,
+         Age) %>%
+  mutate(across(everything(), ~as.numeric(as.character(.)))) %>%
+  drop_na() # We used mutate() to convert all continuous variables into numeric format so that ggplot can create histograms without errors.
+
+# Reshape the data (pivot_longer instead of gather)
+
+long_data <- numeric_vars %>%
+  pivot_longer(cols = everything(),
+               names_to = "variable",
+               values_to = "value")
+
+
+# Create histograms
+ggplot(long_data, aes(x = value)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 15) +
+  facet_wrap(~variable, scales = "free") +
+  labs(title = "Diabetes Variable Distributions",
+       x = "Value",
+       y = "Frequency") +
+  theme_minimal()
+
+
+```
+
+### Explanation
+
+The histograms of the diabetes dataset display the distributions of important health-related variables, revealing patterns such as skewness, unusual values, and potential predictors of diabetes outcomes. For instance:
+
+**Age:** The Age variable shows a slight right skew, with most individuals between 20 and 40 years old. This indicates the dataset mainly includes young to middle-aged women. Because diabetes risk increases with age, the limited presence of older individuals may reduce the overall impact of age as a predictor in the model.
+
+**Blood Pressure**: Blood pressure is bell-shaped distribution, centered around 70–80 mmHg.This resembles a normal distribution, indicating stable, consistent measurements after removing zeros. This makes Blood Pressure a reliable variable for modeling.
+
+**BMI:** BMI shows a near-normal shape, with most individuals having BMI values between 25 and 40. This suggests that many participants fall in the overweight or obese category, which is strongly linked to diabetes risk. Because the distribution is fairly balanced, BMI is expected to be an important and stable predictor.
+
+**Glucose:** Glucose appears as a smooth, approximately normal distribution, centered roughly around 100–140 mg/dL. After removing zeros, this variable becomes much cleaner and more interpretable. Glucose will likely be one of the strongest predictors of diabetes due to its clear and meaningful variation.
+
+**Outcome:** The Outcome variable is binary, with more individuals classified as non-diabetic (0) than diabetic (1). This imbalance means a predictive model may need balancing techniques (oversampling, class weights) to avoid bias toward the majority class.
+
+**Pregnancies:** pregnancies shows that it is Right-skewed, most individuals have 0–5 pregnancies.
+
+**Skin Thickness:** isright-skewed, most measurements around 25 mm.
+
+```{r}
+
+# Visualize class distribution of Outcome
+diabetis_cln$Outcome <- as.factor(diabetis_cln$Outcome)
+ggplot(diabetis_cln, aes(x = Outcome, fill = Outcome)) +
+  geom_bar() +
+  scale_fill_manual(values = c("tomato", "grey")) +
+  theme_minimal() +
+  labs(
+    title = "Distribution of Outcome Classes",
+    x = "Diabetes Category",
+    y = "Count",
+    fill = "Category"
+  )
+```
+
+### Train-Test Split
+
+The classification dataset is split similarly to ensure fair evaluation. This mirrors the regression approach but targets class labels.
+
+```{r}
+set.seed(2025)
+split_idx_clf <- caret::createDataPartition(diabetis_cln$Outcome, p = 0.75, list = FALSE)
+train_clf <- diabetis_cln[split_idx_clf, ]
+test_clf <- diabetis_cln[-split_idx_clf, ]
+```
+
+## Build Classification Decision Tree
+
+```{r message=FALSE, warning=FALSE}
+attach(diabetis_cln)
+diabet_clf_tree <- rpart(
+  Outcome~ .,
+  data = train_clf,
+  method = "class",
+  control = rpart.control(minsplit = 20,   # need >=30 obs to try splitting
+                          maxdepth = 8,    # limit tree depth to keep it readable
+                          cp = 0.02)
+)
+```
+
+A classification tree (method = "class") is built, using metrics like Gini impurity to split data into classes. Features like rm and lstat again prove influential.
+
+## Visualize the Classification Tree
+
+```{r}
+rpart.plot(
+  diabet_clf_tree,
+  type =2,
+  extra = 104,
+  fallen.leaves = TRUE,
+  box.palette = "YlGnBl",
+  shadow.col = "gray",
+  cex = 0.8,
+  main = "Initial Classification Tree"
+)
+```
+
+### Explanation
+
+The classification tree shows that glucose level is the strongest factor in predicting whether a person has diabetes. The model first splits at Glucose < 128, because this threshold best separates people who are likely not diabetic from those who are likely diabetic. For people with low glucose, the tree then uses insulin and age to refine the prediction, while for those with high glucose, age appears again because it helps separate younger individuals with lower risk from older individuals with higher risk. Age appears multiple times in the tree because each split focuses on a different subgroup, and in each subgroup age happens to be the best variable for further separating the outcomes. Overall, the tree shows that glucose is the main indicator of diabetes, while insulin, age, and genetic factors help improve accuracy for more specific cases.
+
+### Prune the Tree to Avoid Overfitting
+
+Pruning a decision tree to avoid overfitting means simplifying a complex, fully grown tree by removing branches (nodes) that capture noise, not patterns, making the model generalize better to new data.
+
+```{r}
+# Find best cp and prune
+best_cp_clf <- diabet_clf_tree$cptable[which.min(diabet_clf_tree$cptable[, "xerror"]), "CP"]
+diabet_clf_tree_prune <- rpart::prune(diabet_clf_tree, cp = best_cp_clf)
+
+# Check complexity parameters
+printcp(diabet_clf_tree)
+rpart::prune(diabet_clf_tree, cp = best_cp_clf)
+plotcp(diabet_clf_tree, main = "Complexity Parameter Plot")
+
+
+
+# Plot pruned tree
+rpart.plot(
+  diabet_clf_tree_prune,
+  type = 2,
+  extra = 104,
+  box.palette = "GnYlRd",
+  fallen.leaves = TRUE,
+  shadow.col = "gray",
+  cex = 0.8,
+  main = "Pruned Classification Tree"
+)
+```
+
+### Explanation
+
+### The complexity parameter (CP)
+
+The Complexity Parameter (CP) in machine learning, especially for decision trees like CART, controls tree size by penalizing complexity; a larger CP leads to a smaller, simpler tree (pruned), while a smaller CP allows for a larger, more detailed tree, preventing overfitting by requiring significant improvement (relative error reduction) for new splits, often tuned via cross-validation to find the best balance for model performance. 
+
+### Pruned Classification Tree
+
+The pruned classification tree shows that glucose level is the dominant variable for predicting diabetes. With a single split at Glucose < 128, individuals with lower glucose levels are mostly classified as non-diabetic, while those with higher glucose levels are classified as diabetic. Pruning removes smaller, less meaningful splits and produces a simpler, more generalizable model that focuses on the most influential predictor.
+
+### Predictions and Evaluation of the Performance
+
+```{r}
+# Predict class labels on test set
+predicted_classes <- predict(diabet_clf_tree_prune, newdata = test_clf, type = "class")
+
+# Confusion matrix
+conf_matrix_clf <- confusionMatrix(predicted_classes, test_clf$Outcome)
+conf_matrix_clf
+```
+
+## Visualize Confusion Matrix
+
+```{r}
+cm_df_clf <- as.data.frame(conf_matrix_clf$table)
+
+ggplot(cm_df_clf, aes(Prediction, Reference)) +
+  geom_tile(aes(fill = Freq), color = "black") +
+  geom_text(aes(label = Freq), size = 5) +
+  scale_fill_gradient(low = "white", high = "darkgreen") +
+  labs(
+    title = "Confusion Matrix for Classification Tree",
+    x = "Predicted Class",
+    y = "Actual Class"
+  ) +
+  theme_minimal()
+```
+
+## Variable Importance
+
+```{r}
+
+# Get variable importance from the pruned classification tree
+var_imp_clf <- diabet_clf_tree_prune$variable.importance
+
+# Convert to a tidy data frame
+imp_df <- data.frame(
+  Feature = names(var_imp_clf),
+  Importance = as.numeric(var_imp_clf)
+)
+
+# Sort and reorder for plotting
+imp_df <- imp_df %>%
+  arrange(Importance) %>%
+  mutate(Feature = factor(Feature, levels = Feature))
+
+# Plot with ggplot2
+ggplot(imp_df, aes(x = Feature, y = Importance, fill = Importance)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient(low = "gray", high = "sky blue") +
+  labs(
+    title = "Variable Importance in Classification Tree",
+    x = "Features",
+    y = "Importance Score"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.y = element_text(color = "black", face = "bold"),
+    axis.text.x = element_text(color = "black"),
+    legend.position = "none"
+  )
+```
+
+### Exolanation
+
+In classification tasks, feature importance is determined by how effectively each variable contributes to improving the purity of the node splits, using measures like Gini impurity or information gain. Here, the target variable Outcome is transformed into a categorical variable with two classes: Diabetic, Non- diabetic. Variables like Glucose and BMI still often rank highly because they help to distinguish between the diabetic and non-diabetic, which generally differ in health characteristics and physical attributes. However, in classification, other variables such as Age (Age),Blood_pressure, Pregnancies, Diabetes_Pedigree_Function, and Skin_Thickness may also gain importance if they help cleanly split one class from another.
+
+
+### Classification Report
+
+Precision, recall, and F1-scores are tabulated. These metrics highlight class-specific performance, crucial for imbalanced data.
+
+
+```{r}
+# Compute metrics 
+overall_accuracy <- conf_matrix_clf$overall["Accuracy"]
+precision <- conf_matrix_clf$byClass["Pos Pred Value"]
+recall <- conf_matrix_clf$byClass["Sensitivity"]
+f1 <- 2 * (precision * recall) / (precision + recall)
+
+# Create summary table 
+class_report <- data.frame(
+  Metric = c("Accuracy", "Precision", "Recall", "F1-Score"),
+  Value = c(overall_accuracy, precision, recall, f1)
+)
+
+# Display styled table
+class_report %>%
+  kbl(
+    caption = "Classification Report: Binary Metrics",
+    digits = 3,
+    align = "c",
+    format = "html"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    font_size = 14
+  ) %>%
+  column_spec(2, color = "white", background = "#4E79A7")
+
+```
+
+### Explanation
+
+The classification report provides a detailed summary of the performance of the pruned classification decision tree in predicting the diabetes categories of diabetes and not having diabetes from the Outcome variable in the Diabetes dataset. For each class, the report includes three key metrics: precision, recall, and F1-score.
+
+Precision reflects the accuracy of positive predictions—how many patient predicted as belonging to a class actually belong to that class and has 84%
+
+The F1-score, a harmonic mean of precision and recall, gives an overall sense of the model’s balance in classification performance and has 83.4% Overall, the classification report demonstrates that the model is more confident and accurate in identifying clearly defined patient categories(Diabetic and no Diabetic). 
+
+
+# DECISION TREES ANALYSIS -- CASE OF REGRESSION
+
+## Dataset Description.
+
+The **Salary** dataset contains information about the salaries of employees at a company. Each row represents a different employee, and the columns include information such as age, gender, education level, job title, years of experience, and salary.
+
+###  Variables Used:
+
+| Variable | Description |
+|----------|-------------|
+| `Age`                     | Number of years the individual has lived`           
+| `Gender`                  | gender of each employee can be either male or female
+| `Education Level`         | educational level of each employee, which can be high school, bachelor's degree, master's degree, or PhD
+| `Job Title`                 | contains the job title of each employee. The job titles can vary depending on the company and may include positions 
+| `Years of experience`      | number of years of work experience of each employee
+| `Salary`                   | annual salary of each employee in US dollars
+
+
+
+## Libraries and Setup 
+Key R libraries tools are loaded to streamline data processing, modeling, and evaluation.
+
+```{r}
+# Load necessary libraries
+library(MASS)        # For Salary_Data dataset
+library(rpart)       # For decision tree modeling
+library(rpart.plot)  # For tree visualization
+#library(caret)       # For train-test split and evaluation
+library(dplyr)       # For data manipulation
+library(ggplot2)     # For visualization
+library(e1071)       # For model tuning
+library(tidyverse)
+library(kableExtra)
+library(tidyr)
+```
+
+##Loading the Data
+
+```{r}
+Salary_Data= read.csv("Salary_Data.csv")
+head(Salary_Data)
+```
+
+## Data Inspection
+Initial checks (e.g., str(), summary()) reveal data types, distributions, and missing values. No missing values were found, eliminating the need for imputation. This step ensures data quality before modeling.
+```{r}
+str(Salary_Data)
+summary(Salary_Data)
+```
+
+## DATA CLEANING
+```{r}
+# Check for missing values
+sum(is.na(Salary_Data))
+```
+```{r}
+## Removing the missing values
+Salary_Data <- na.omit(Salary_Data)
+```
+
+```{r}
+# Check again for missing valuesd
+sum(is.na(Salary_Data))
+```
+
+
+No NA values in this dataset, so no imputation needed.  This step is essential to avoid biases or errors during modeling.
+
+```{r}
+# Removing unnecessary columns
+Salary_Data$Job.Title <- NULL
+
+```
+
+## Histograms 
+```{r}
+# Select only numeric columns
+numeric_data <- Salary_Data[, c("Age", "Years.of.Experience", "Salary")]
+
+# Reshaping for ggplot
+long_data <- tidyr::gather(numeric_data, key = "variable", value = "value")
+
+# Plot histograms
+ggplot(long_data, aes(x = value)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 15) +
+  facet_wrap(~variable, scales = "free") +
+  labs(title = "Variable Distributions",
+       x = "Value",
+       y = "Frequency") +
+  theme_minimal()
+
+```
+## Explanation 
+The histograms of the Salary_Data housing dataset reveal the distributions of key numeric variables, providing insights into their skewness and potential impact on the model. For instance:
+
+Age is roughly bell-shaped (like a normal distribution), but it appears slightly right-skewed (positively skewed). This means the tail of the distribution is longer on the right side, suggesting there are a few older individuals, but the vast majority of the data is concentrated on the younger side.
+
+Salary is right-skewed (positively skewed). There's a rapid decline in frequency as the salary increases.
+
+Years of experience does not follow a simple pattern; instead, it appears multimodal—showing several distinct peaks. Noticeable clusters occur around 3–5 years, 10–12 years, 15–18 years, and 20–22 years of experience.
+
+```{r}
+# Select only categorical columns
+categorical_data <- Salary_Data[, c("Gender", "Education.Level")]
+
+# Reshape to long format
+long_cat <- pivot_longer(categorical_data, 
+                         cols = everything(), 
+                         names_to = "variable", 
+                         values_to = "value")
+
+# Plot bar charts for all categorical variables
+ggplot(long_cat, aes(x = value)) +
+  geom_bar(fill = "lightgreen", color = "black") +
+  facet_wrap(~variable, scales = "free") +
+  labs(title = "Categorical Variable Distributions",
+       x = "Category",
+       y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+# Explanation
+The distribution of education levels shows that most employees hold a Bachelor’s degree, with this group being the largest by a wide margin. Master’s degree holders form the second-largest group, though their numbers are noticeably lower. PhD holders make up the smallest portion of the dataset, representing only a small fraction of the total employees.
+
+The gender distribution in the dataset is fairly balanced. The number of males is slightly higher, at around 195, while females make up about 180 of the entries. Overall, both genders are represented almost equally, with only a small difference between the two groups.
+
+
+## Data Splitting (Training and Testing Sets)
+```{r}
+set.seed(123)
+n <- nrow(Salary_Data)
+train_indices <- sample(1:n, size = floor(0.75 * n))
+train_data <- Salary_Data[train_indices, ]
+test_data <- Salary_Data[-train_indices, ]
+```
+The data is split into training (75%) and testing (25%) sets using caret::createDataPartition(). This ensures the model is evaluated on unseen data, validating its generalizability.
+
+
+
+## Creation and fitting the initial unpruned decision tree model (with small cp value)
+```{r}
+initial_tree <- rpart(Salary ~ ., data = train_data, method = "anova", 
+                     control = rpart.control(cp = 0.0001, minsplit = 2))
+```
+
+## Plotting the initial unpruned tree
+```{r}
+# Create and fit a presentable initial decision tree (before pruning)
+initial_tree <- rpart(Salary ~ ., data = train_data, method = "anova", 
+                     control = rpart.control(cp = 0.001, minsplit = 10, minbucket = 5))
+
+# Plot the initial tree with enhanced visualization
+rpart.plot(initial_tree, 
+           type = 4, 
+           extra = 101, 
+           under = TRUE, 
+           cex = 0.8,
+           box.palette = c("#1B9E77", "#D95F02", "#7570B3"),  # Green-Orange-Purple palette
+           nn = TRUE,                   # Show node numbers
+           fallen.leaves = FALSE,       # Keep leaves at tree bottom
+           shadow.col = "gray88",       # Subtle shadow effect
+           branch.lty = 3,              # Dotted branch lines
+           branch.lwd = 2,              # Slightly thicker branches
+           main = "Initial Decision Tree (Before Pruning)",
+           sub = "Color intensity represents node purity",
+           col = "darkblue",           # Text color
+           border.col = "gray40",       # Box border color
+           roundint = FALSE)
+```
+## Explanation
+The initial unpruned decision tree is built using a very small complexity parameter (cp = 0.001), which allows the model to grow deep and capture detailed patterns in the training data. This results in a large, complex tree with many branches—some of which may fit noise rather than meaningful salary patterns.
+
+The first split occurs on the predictor that best explains variation in Salary (often Years of Experience or Education Level). This separates employees into two major groups based on their most influential salary factor.
+
+Subsequent splits refine the predictions using variables such as Age, Education Level, and Gender, creating increasingly specific subgroups. These narrow branches lower training error but increase the risk of overfitting by modeling patterns that may not generalize beyond the training data.
+
+The unpruned tree visualization shows dense and complex branching, which makes interpretation difficult. However, generating the full tree is an important first step, because it enables pruning later—removing weak or insignificant splits to produce a simpler and more reliable model.
+## Create and fit the pruned decision tree model (with default cp)
+```{r}
+tree_fit <- rpart(Salary ~ ., data = train_data, method = "anova")
+```
+
+## Plot the pruned tree
+```{r}
+cat("\nFinal Pruned Decision Tree:\n")
+rpart.plot(tree_fit, type = 4, extra = 101, under = TRUE, cex = 0.8,
+           box.palette = c("#4E84C4", "#D16103", "#52854C"),  # Blue, Orange, Green
+           nn = TRUE,  # Show node numbers
+           shadow.col = "gray",  # Add subtle shadows
+           main = "Final Pruned Decision Tree (Regression)",
+           branch.lty = 3,  # Dotted branch lines
+           roundint = FALSE)
+```
+## Explanation
+To balance accuracy and simplicity, the tree is pruned by selecting an optimal cp value (via cross-validation), which reduces overfitting while retaining predictive power. The pruned tree is more interpretable and generalizable:
+
+The decision tree predicting Salary is pruned using an optimal complexity parameter (cp) to reduce overfitting while keeping key splits. This makes the tree simpler and more interpretable.
+
+The pruned tree keeps important splits such as Age < 41 and Years of Experience < 5.5, while removing less useful branches.
+
+It has 6 terminal nodes, each representing a different salary range. Younger employees with little experience earn the lowest salaries, while older employees or mid-career employees with advanced degrees earn the highest.
+
+Variable importance shows that Age is the most influential factor, followed by Years of Experience and Education Level, highlighting how these variables determine salary.
+
+
+
+## Make predictions on the testing data
+```{r}
+predictions <- predict(tree_fit, test_data)
+```
+
+## Calculate RMSE and R-squared 
+```{r}
+rmse <- sqrt(mean((test_data$Salary - predictions)^2))
+ss_res <- sum((test_data$Salary - predictions)^2)
+ss_tot <- sum((test_data$Salary - mean(test_data$Salary))^2)
+r_squared <- 1 - (ss_res / ss_tot)
+```
+
+## Display performance metrics
+```{r}
+cat("Model Performance:\n")
+cat("RMSE:", round(rmse, 3), "\n")
+cat("R-squared:", round(r_squared, 3), "\n")
+```
+## Explanation
+The Root Mean Squared Error (RMSE) is 16,742.37, which indicates that, on average, the model’s predicted salaries deviate from the actual salaries by about $16,742.
+
+The R-squared value is 0.862, meaning the model explains 86.2% of the variance in employee salaries. In other words, the predictors—Age, Years of Experience, and Education Level—account for most of the differences in salary, showing strong predictive power.
+
+However, the remaining 13.8% unexplained variance highlights limitations, potentially due to unmeasured factors like neighborhood amenities or more complex, nonlinear relationships that a single decision tree cannot fully capture. Together, these metrics confirm that the model is useful for identifying broad trends and making approximate valuations but may require enhancements—such as additional features, ensemble methods, or residual analysis—to improve precision for high-stakes applications. The balance between interpretability (from the tree structure) and accuracy (from the metrics) makes this model a practical tool for exploratory analysis.'
+
+
+## CONCLUSION
+The decision tree model effectively predicts employee salaries using Age, Years of Experience, and Education Level. 
+
+Age is the most influential factor, experience matters for younger employees, and higher education boosts salaries for mid-career staff.
+
+The pruned tree provides an interpretable structure with clear salary ranges, while the model’s performance metrics—R-squared of 0.862 indicate strong predictive ability with moderate error. Overall, the model is reliable for understanding salary patterns and making informed predictions.
